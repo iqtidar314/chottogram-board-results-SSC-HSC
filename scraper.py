@@ -213,7 +213,8 @@ async def main():
     end_roll = args.end
     output_file = args.output
     
-    print(f"Starting Scraper: {start_roll} to {end_roll} -> {output_file}")
+    total_rolls = end_roll - start_roll + 1
+    print(f"Starting Scraper: {start_roll} to {end_roll} ({total_rolls} records) -> {output_file}")
     
     # Setup CSV
     file_exists = os.path.isfile(output_file)
@@ -233,8 +234,19 @@ async def main():
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
         async with AsyncSession() as session:
             tasks = []
+            processed_count = 0
+            
+            # Helper to wrap the task and update progress
+            async def wrap_task(r):
+                nonlocal processed_count
+                await fetch_result(session, r, semaphore, writer, f)
+                processed_count += 1
+                if processed_count % 100 == 0:
+                    percent = (processed_count / total_rolls) * 100
+                    print(f"[PROGRESS] Processed {processed_count}/{total_rolls} ({percent:.2f}%)")
+
             for roll in range(start_roll, end_roll + 1):
-                task = asyncio.create_task(fetch_result(session, roll, semaphore, writer, f))
+                task = asyncio.create_task(wrap_task(roll))
                 tasks.append(task)
             
             await asyncio.gather(*tasks)
