@@ -1,0 +1,51 @@
+name: Bulk Scraper Matrix
+
+on:
+  workflow_dispatch:
+  # schedule:
+  #   - cron: '0 0 * * *' # Optional: Run daily (disabled by default)
+
+jobs:
+  scrape:
+    name: Scrape Chunk ${{ matrix.chunk }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        chunk: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19]
+    
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Calculate Range and Run
+        run: |
+          # Constants
+          START_BASE=100000
+          CHUNK_SIZE=45000
+          
+          # Calculate range for this worker
+          CHUNK_ID=${{ matrix.chunk }}
+          START=$((START_BASE + (CHUNK_ID * CHUNK_SIZE)))
+          END=$((START + CHUNK_SIZE - 1))
+          
+          echo "Worker $CHUNK_ID processing: $START to $END"
+          
+          # Run script
+          python scraper.py --start $START --end $END --output results_${CHUNK_ID}.csv
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: results-chunk-${{ matrix.chunk }}
+          path: results_${{ matrix.chunk }}.csv
+          retention-days: 5
