@@ -206,15 +206,17 @@ async def main():
     parser.add_argument("--start", type=int, required=True, help="Start Roll Number")
     parser.add_argument("--end", type=int, required=True, help="End Roll Number")
     parser.add_argument("--output", type=str, default="results.csv", help="Output CSV file")
+    parser.add_argument("--concurrency", type=int, default=10, help="Max concurrent requests (default: 10)")
     
     args = parser.parse_args()
     
     start_roll = args.start
     end_roll = args.end
     output_file = args.output
+    concurrency_limit = args.concurrency
     
     total_rolls = end_roll - start_roll + 1
-    print(f"Starting Scraper: {start_roll} to {end_roll} ({total_rolls} records) -> {output_file}")
+    print(f"Starting Scraper: {start_roll} to {end_roll} ({total_rolls} records) -> {output_file} | Concurrency: {concurrency_limit}")
     
     # Setup CSV
     file_exists = os.path.isfile(output_file)
@@ -231,7 +233,7 @@ async def main():
         if not file_exists:
             writer.writeheader()
             
-        semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+        semaphore = asyncio.Semaphore(concurrency_limit)
         async with AsyncSession() as session:
             tasks = []
             processed_count = 0

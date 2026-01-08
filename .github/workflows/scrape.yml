@@ -40,8 +40,8 @@ jobs:
           
           echo "Worker $CHUNK_ID processing: $START to $END"
           
-          # Run script
-          python scraper.py --start $START --end $END --output results_${CHUNK_ID}.csv
+          # Run script with high concurrency (20)
+          python scraper.py --start $START --end $END --output results_${CHUNK_ID}.csv --concurrency 20
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
