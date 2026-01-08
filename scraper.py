@@ -52,6 +52,16 @@ KNOWN_SUBJECTS = [
     "ARTS & CRAFTS(225)",
 ]
 
+# Build a lookup map: Code -> Standard Column Name
+# e.g., "101" -> "BANGLA(101)"
+import re
+SUBJECT_CODE_MAP = {}
+for subj in KNOWN_SUBJECTS:
+    match = re.search(r"\((\d+)\)", subj)
+    if match:
+        code = match.group(1)
+        SUBJECT_CODE_MAP[code] = subj
+
 async def fetch_result(session, roll, semaphore, writer, file_handle):
     async with semaphore:
         for attempt in range(MAX_RETRIES + 1):
@@ -116,19 +126,28 @@ async def fetch_result(session, roll, semaphore, writer, file_handle):
                             for row in rows:
                                 cols = row.find_all("td")
                                 if len(cols) >= 2:
-                                    sub_name = cols[0].get_text(strip=True)
+                                    sub_name_raw = cols[0].get_text(strip=True) # e.g. "BANGLA 1ST(101)"
                                     sub_marks = cols[1].get_text(strip=True)
                                     
-                                    # Normalize Logic: 
-                                    # If matches KNOWN_SUBJECTS exactly, put in that column.
-                                    # Else put in 'others'
-                                    if sub_name in KNOWN_SUBJECTS:
-                                        subjects_data[sub_name] = sub_marks
+                                    # Normalize Logic: Match by Code first
+                                    # Extract code from raw string "Foo(101)" -> "101"
+                                    code_match = re.search(r"\((\d+)\)", sub_name_raw)
+                                    target_col = None
+                                    
+                                    if code_match:
+                                        found_code = code_match.group(1)
+                                        if found_code in SUBJECT_CODE_MAP:
+                                            target_col = SUBJECT_CODE_MAP[found_code]
+                                    
+                                    # Fallback to exact match (rarely needed if code works) in case format differs
+                                    if not target_col and sub_name_raw in KNOWN_SUBJECTS:
+                                         target_col = sub_name_raw
+
+                                    if target_col:
+                                        subjects_data[target_col] = sub_marks
                                     else:
-                                        # Heuristic: Maybe user wants ALL columns? 
-                                        # For now, sticking to known cols + one overflow col to keep CSV valid.
-                                        # If we dynamically add cols, DictWriter crashes if header isn't updated.
-                                        other_subjects.append(f"{sub_name}:{sub_marks}")
+                                        # Unknown code/subject -> Add to others
+                                        other_subjects.append(f"{sub_name_raw}:{sub_marks}")
                         
                         record = {
                             "roll": roll,
