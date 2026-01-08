@@ -45,7 +45,11 @@ jobs:
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: results-chunk-${{ matrix.chunk }}
-          path: results_${{ matrix.chunk }}.csv
+          path: |
+            results_${{ matrix.chunk }}.csv
+            failed_${{ matrix.chunk }}.csv
+            not_found_${{ matrix.chunk }}.csv
           retention-days: 5

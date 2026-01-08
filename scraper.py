@@ -50,6 +50,7 @@ KNOWN_SUBJECTS = [
     
     # Others/Optionals potentially appearing (just in case)
     "ARTS & CRAFTS(225)",
+    "ENGINEERING DRAWING & WORKSHOP PRACTICE(180)",
 ]
 
 # Build a lookup map: Code -> Standard Column Name
@@ -62,7 +63,7 @@ for subj in KNOWN_SUBJECTS:
         code = match.group(1)
         SUBJECT_CODE_MAP[code] = subj
 
-async def fetch_result(session, roll, semaphore, writer, file_handle):
+async def fetch_result(session, roll, semaphore, writer, file_handle, fail_writer=None, fail_handle=None, nf_writer=None, nf_handle=None):
     async with semaphore:
         for attempt in range(MAX_RETRIES + 1):
             try:
@@ -87,7 +88,10 @@ async def fetch_result(session, roll, semaphore, writer, file_handle):
                     text = response.text
                     
                     if "Sorry! No Result Found" in text:
-                        return
+                        if nf_writer:
+                            nf_writer.writerow([roll])
+                            if nf_handle: nf_handle.flush()
+                        return True # Success in terms of "processed"
 
                     soup = BeautifulSoup(text, 'html.parser')
                     
@@ -96,7 +100,7 @@ async def fetch_result(session, roll, semaphore, writer, file_handle):
                         info_table = soup.select_one("table.tftable")
                         if not info_table:
                             print(f"[WARN] {roll} - Info table not found.")
-                            return
+                            return True
 
                         def get_text(row_idx, col_idx):
                             el = info_table.select_one(f"tr:nth-child({row_idx}) > td:nth-child({col_idx})")
@@ -175,12 +179,15 @@ async def fetch_result(session, roll, semaphore, writer, file_handle):
                             print(f"[SUCCESS] {roll} - {val_name} - GPA: {val_gpa}")
                             writer.writerow(record)
                             file_handle.flush()
-                            return
+                            return True
                             
                     except Exception as e:
                         print(f"[PARSE ERROR] {roll}: {e}")
+                        # Keep retrying on parse error? Maybe not, usually scraping logic bug.
+                        # For now, treat as processed.
+                        pass
                     
-                    return
+                    return True
 
                 elif response.status_code in [500, 502, 503, 504]:
                     print(f"[RETRY] {roll} - Status {response.status_code}")
@@ -188,7 +195,11 @@ async def fetch_result(session, roll, semaphore, writer, file_handle):
                     continue
                 else:
                     print(f"[FAIL] {roll} - Status {response.status_code}")
-                    return
+                    # Log as failed
+                    if fail_writer:
+                        fail_writer.writerow([roll, response.status_code])
+                        if fail_handle: fail_handle.flush()
+                    return False
 
             except Exception as e:
                 # Handle timeout specifically
@@ -200,6 +211,10 @@ async def fetch_result(session, roll, semaphore, writer, file_handle):
                 await asyncio.sleep(RETRY_DELAY)
         
         print(f"[GIVEUP] {roll} - Max retries reached.")
+        if fail_writer:
+             fail_writer.writerow([roll, "MAX_RETRIES"])
+             if fail_handle: fail_handle.flush()
+        return False
 
 async def main():
     parser = argparse.ArgumentParser(description="HSC Results Scraper")
@@ -215,21 +230,36 @@ async def main():
     output_file = args.output
     concurrency_limit = args.concurrency
     
+    # Derive filenames
+    failed_file = output_file.replace("results", "failed")
+    if failed_file == output_file: failed_file = "failed_" + output_file
+        
+    not_found_file = output_file.replace("results", "not_found")
+    if not_found_file == output_file: not_found_file = "not_found_" + output_file
+
     total_rolls = end_roll - start_roll + 1
     print(f"Starting Scraper: {start_roll} to {end_roll} ({total_rolls} records) -> {output_file} | Concurrency: {concurrency_limit}")
     
-    # Setup CSV
+    # Setup CSVs
     file_exists = os.path.isfile(output_file)
-    with open(output_file, mode='a', newline='', encoding='utf-8') as f:
-        # Full field list
+    with open(output_file, mode='a', newline='', encoding='utf-8') as f, \
+         open(failed_file, mode='a', newline='', encoding='utf-8') as f_fail, \
+         open(not_found_file, mode='a', newline='', encoding='utf-8') as f_nf:
+        
+        # Success Writer
         fieldnames = [
             'roll', 'name', 'board', 'father_name', 'mother_name', 
             'group', 'session', 'reg_no', 'type', 'institute', 
             'result', 'gpa'
         ] + KNOWN_SUBJECTS + ['others']
-        
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction='ignore')
         
+        # Failure Writer
+        fail_writer = csv.writer(f_fail)
+        
+        # Not Found Writer
+        nf_writer = csv.writer(f_nf)
+
         if not file_exists:
             writer.writeheader()
             
@@ -241,17 +271,20 @@ async def main():
             # Helper to wrap the task and update progress
             async def wrap_task(r):
                 nonlocal processed_count
-                await fetch_result(session, r, semaphore, writer, f)
+                # Retrieve final status (True/False)
+                success = await fetch_result(session, r, semaphore, writer, f, fail_writer, f_fail, nf_writer, f_nf)
+                # ... (rest of wrapper)
                 processed_count += 1
                 if processed_count % 100 == 0:
                     percent = (processed_count / total_rolls) * 100
                     print(f"[PROGRESS] Processed {processed_count}/{total_rolls} ({percent:.2f}%)")
 
             for roll in range(start_roll, end_roll + 1):
+                 # Pass writers to fetch_result
                 task = asyncio.create_task(wrap_task(roll))
                 tasks.append(task)
             
-            await asyncio.gather(*tasks)
+            await asyncio.wrap_future(asyncio.gather(*tasks))
 
     print("Scraping Completed.")
 
